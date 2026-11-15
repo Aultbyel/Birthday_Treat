@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#07090f" />
+    <meta
+      name="description"
+      content="为重要的人点亮一场星河生日。写下名字、放上肖像，生成一条可分享的全息祝福链接。"
+    />
+    <meta property="og:title" content="星诞 · 全息生日祝福" />
+    <meta
+      property="og:description"
+      content="为重要的人点亮一场可分享的星河生日。无需服务器。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://aultbyel.github.io/Birthday_Treat/" />
+    <title>星诞 · 全息生日祝福</title>
+    <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="%BASE_URL%favicon.svg" />
+    <style>
+      html, body { margin: 0; background: #07090f; color: #e7eef5; }
+      #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+      .veil { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: #07090f; }
+      html.boot-view #panel { display: none; }
+      .noscript-note { position: fixed; left: 1rem; right: 1rem; bottom: 1rem; z-index: 40; }
+    </style>
+    <script>
+      (function () {
+        var h = location.hash || '';
+        if (h.indexOf('p=') !== -1 || h.indexOf('z=') !== -1) {
+          document.documentElement.classList.add('boot-view');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <canvas id="scene" aria-hidden="true"></canvas>
+    <div class="hud" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+
+    <header class="topbar">
+      <a class="brand" id="brand" href="%BASE_URL%">
+        <span class="brand-mark">星诞</span>
+        <span class="brand-sub">STARLIGHT</span>
+      </a>
+      <div class="top-actions">
+        <button class="ghost" id="replay" type="button" hidden>重播</button>
+        <button class="ghost icon-btn" id="sound" type="button" aria-pressed="false">
+          <span class="sound-label">声音</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="panel" id="panel">
+      <p class="eyebrow">一场只属于 TA 的星河</p>
+      <h1>点亮生日祝福</h1>
+      <p class="lead">写下名字，放上一张肖像。一条链接，就能把这场庆典交给对方。</p>
+
+      <form id="editor-form" autocomplete="off">
+        <label class="field">
+          <span>名字</span>
+          <input
+            id="name"
+            name="recipient"
+            type="text"
+            maxlength="20"
+            placeholder="寿星的名字"
+            enterkeyhint="next"
+            autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+          />
+        </label>
+
+        <label class="field">
+          <span>祝福语 <em>可选</em></span>
+          <textarea
+            id="message"
+            name="message"
+            maxlength="80"
+            rows="3"
+            placeholder="愿星河轻轻托住你的心愿，新的一岁，平安、热烈、如愿。生日快乐。"
+          ></textarea>
+          <small class="counter"><span id="message-count">0</span>/80</small>
+        </label>
+
+        <div class="field">
+          <span id="avatar-label">肖像</span>
+          <label class="drop" id="drop" for="file">
+            <input id="file" type="file" accept="image/*" hidden />
+            <img id="thumb" alt="" />
+            <span class="drop-copy">
+              <strong>点击或拖入一张照片</strong>
+              <small>裁成圆形，压缩进链接</small>
+            </span>
+          </label>
+          <button class="text-btn" id="remove" type="button" hidden>移除肖像</button>
+        </div>
+
+        <p class="status" id="status" role="status"></p>
+        <p class="warn" id="warn" hidden></p>
+        <button class="text-btn" id="shrink" type="button" hidden>改用更小的肖像</button>
+
+        <button class="btn-primary" id="generate" type="button">生成分享链接</button>
+
+        <div class="share-box" id="share-box" hidden>
+          <label class="field">
+            <span id="link-label">分享链接</span>
+            <input id="link" type="text" readonly />
+          </label>
+          <div class="share-actions">
+            <button class="btn-secondary" id="copy" type="button">复制链接</button>
+            <button class="btn-secondary" id="native-share" type="button" hidden>分享</button>
+            <button class="btn-secondary" id="open-view" type="button">新标签预览</button>
+          </div>
+        </div>
+      </form>
+
+      <blockquote class="preview-blessing" id="preview-blessing"></blockquote>
+      <p class="fineprint">没有服务器。名字、祝福和肖像都保存在链接里，拿到链接的人都能看见。</p>
+    </main>
+
+    <section class="viewer" id="viewer" hidden>
+      <p class="viewer-kicker">星河祝你生日快乐</p>
+      <p class="viewer-msg" id="viewer-msg"></p>
+      <p class="sr-only" id="sr-live" aria-live="polite"></p>
+      <a class="btn-secondary viewer-create" id="create" href="%BASE_URL%">制作我的祝福</a>
+    </section>
+
+    <div class="fallback" id="fallback" hidden>
+      <div class="fallback-card">
+        <img id="fallback-img" alt="" hidden />
+        <h2 id="fallback-name"></h2>
+        <p id="fallback-text"></p>
+      </div>
+    </div>
+
+    <div class="veil" id="veil">
+      <p>正在展开星图…</p>
+    </div>
+    <noscript><p class="noscript-note">需要启用 JavaScript，才能展开这场全息祝福。</p></noscript>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
