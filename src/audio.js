@@ -99,5 +99,8 @@ export function createAudio() {
     async toggle() {
       return setEnabled(!enabled);
     },
+    playChime() {
+      if (enabled) chime();
+    },
   };
 }

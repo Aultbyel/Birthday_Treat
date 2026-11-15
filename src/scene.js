@@ -6,8 +6,6 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { PLACEHOLDER_NAME } from './content.js';
 import {
-  columnFragment,
-  columnVertex,
   crystalFragment,
   crystalVertex,
   dustFragment,
@@ -22,40 +20,26 @@ import {
   plaqueVertex,
   portraitFragment,
   portraitVertex,
-  ribbonFragment,
-  ribbonVertex,
   ringFragment,
   ringVertex,
-  sparkFragment,
-  sparkVertex,
   starFragment,
   starVertex,
-  tetherFragment,
-  tetherVertex,
   timeUniform,
 } from './shaders.js';
 
 const SERIF = '"Songti SC","STSong","Noto Serif SC","Source Han Serif SC","PMingLiU","Songti TC","WenQuanYi Micro Hei",serif';
 const NAME_W = 1400;
-const NAME_H = 480;
+const NAME_H = 420;
 
 const layout = {
-  camX: 0.9,
-  camY: 1.55,
-  camZ: 6.3,
-  lookX: 0.1,
-  lookY: 1.2,
-  lookZ: 0,
-  fov: 30,
-  px: 2.05,
-  py: 1.58,
-  pz: 0.4,
-  pScale: 1,
-  pYaw: 0.48,
-  nx: 0,
-  ny: 2.55,
-  nz: 0.05,
-  nScale: 1,
+  lookX: 0,
+  dist: 6.2,
+  pitch: 0.22,
+  portrait: new THREE.Vector3(1.7, 1.58, 0.35),
+  portraitScale: 0.86,
+  portraitYaw: 0.55,
+  nameY: 2.22,
+  nameScale: 0.64,
 };
 
 function mulberry32(seed) {
@@ -69,15 +53,12 @@ function mulberry32(seed) {
   };
 }
 
-function reveal(progress, start, duration) {
-  const amount = (progress - start) / duration;
-  if (amount <= 0) return 0;
-  if (amount >= 1) return 1;
-  return amount * amount * (3 - 2 * amount);
+function easeOutCubic(amount) {
+  return 1 - (1 - amount) ** 3;
 }
 
-function easeOutQuart(amount) {
-  return 1 - (1 - amount) ** 4;
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function shaderMaterial(options) {
@@ -87,50 +68,100 @@ function shaderMaterial(options) {
   return material;
 }
 
-function addRim(material, tint = 'vec3(0.4, 0.9, 1.0)') {
+function lathe(pairs, segments, flutes = 0, amp = 0) {
+  const points = pairs.map(([x, y]) => new THREE.Vector2(x, y));
+  const geometry = new THREE.LatheGeometry(points, segments);
+  if (flutes > 0 && amp > 0) {
+    const position = geometry.attributes.position;
+    for (let i = 0; i < position.count; i += 1) {
+      const x = position.getX(i);
+      const z = position.getZ(i);
+      const radius = Math.hypot(x, z);
+      if (radius < 0.04) continue;
+      const angle = Math.atan2(z, x);
+      const shaped = 1 + amp * Math.cos(angle * flutes);
+      position.setX(i, Math.cos(angle) * radius * shaped);
+      position.setZ(i, Math.sin(angle) * radius * shaped);
+    }
+    geometry.computeVertexNormals();
+  }
+  return geometry;
+}
+
+function addRim(material) {
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <emissivemap_fragment>',
       `#include <emissivemap_fragment>
       {
-        float rim = pow(1.0 - saturate(dot(normalize(normal), normalize(vViewPosition))), 2.5);
-        totalEmissiveRadiance += vec3(0.08, 0.12, 0.16);
-        totalEmissiveRadiance += ${tint} * rim * 0.55;
+        float rim = pow(1.0 - saturate(dot(normalize(normal), normalize(vViewPosition))), 2.2);
+        totalEmissiveRadiance += vec3(0.05, 0.16, 0.2);
+        totalEmissiveRadiance += vec3(0.45, 0.85, 1.0) * rim * 0.65;
       }`,
     );
   };
 }
 
-function tierGeometry(radius, height) {
-  const points = [
-    new THREE.Vector2(0.001, 0),
-    new THREE.Vector2(radius * 0.9, 0.0),
-    new THREE.Vector2(radius, 0.035),
-    new THREE.Vector2(radius * 0.99, height * 0.55),
-    new THREE.Vector2(radius * 0.995, height - 0.02),
-    new THREE.Vector2(radius * 0.72, height),
-    new THREE.Vector2(0.001, height),
-  ];
-  return new THREE.LatheGeometry(points, 64);
+function drawNameplate(ctx, name, placeholder) {
+  const width = NAME_W;
+  const height = NAME_H;
+  ctx.clearRect(0, 0, width, height);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `500 36px ${SERIF}`;
+  ctx.fillStyle = placeholder ? 'rgba(190, 220, 230, 0.7)' : 'rgba(246, 226, 184, 0.95)';
+  ctx.fillText(placeholder ? '预 览' : '生 日 快 乐', width / 2, height * 0.28);
+  let size = 156;
+  ctx.font = `600 ${size}px ${SERIF}`;
+  while (ctx.measureText(name).width > width * 0.86 && size > 64) {
+    size -= 4;
+    ctx.font = `600 ${size}px ${SERIF}`;
+  }
+  const gradient = ctx.createLinearGradient(width * 0.12, 0, width * 0.88, height);
+  if (placeholder) {
+    gradient.addColorStop(0, 'rgba(210, 236, 244, 0.8)');
+    gradient.addColorStop(1, 'rgba(230, 220, 245, 0.7)');
+  } else {
+    gradient.addColorStop(0, '#d7fbff');
+    gradient.addColorStop(0.5, '#fff6dc');
+    gradient.addColorStop(1, '#ffd0ea');
+  }
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = 'rgba(8, 14, 24, 0.45)';
+  ctx.strokeText(name, width / 2, height * 0.66);
+  ctx.fillStyle = gradient;
+  ctx.fillText(name, width / 2, height * 0.66);
 }
 
-function dripGeometry() {
-  return new THREE.LatheGeometry(
-    [
-      new THREE.Vector2(0.001, 0),
-      new THREE.Vector2(0.064, 0),
-      new THREE.Vector2(0.046, -0.07),
-      new THREE.Vector2(0.022, -0.18),
-      new THREE.Vector2(0.011, -0.3),
-      new THREE.Vector2(0.001, -0.36),
-    ],
-    8,
-  );
+function drawEmblem(ctx, size) {
+  ctx.clearRect(0, 0, size, size);
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 8, size / 2, size / 2, size * 0.5);
+  gradient.addColorStop(0, '#245068');
+  gradient.addColorStop(1, '#081018');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = 'rgba(190, 240, 255, 0.9)';
+  ctx.lineWidth = Math.max(2, size * 0.012);
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size * 0.28, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#f3d7a6';
+  ctx.beginPath();
+  for (let i = 0; i < 10; i += 1) {
+    const radius = i % 2 === 0 ? size * 0.15 : size * 0.065;
+    const angle = -Math.PI / 2 + (i / 10) * Math.PI * 2;
+    const x = size / 2 + Math.cos(angle) * radius;
+    const y = size / 2 + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
 }
 
-function crossFlameGeometry() {
-  const w = 0.26;
-  const h = 0.46;
+function crossFlame() {
+  const w = 0.22;
+  const h = 0.4;
   const hw = w / 2;
   const positions = new Float32Array([
     -hw, 0, 0, hw, 0, 0, hw, h, 0, -hw, h, 0,
@@ -147,171 +178,9 @@ function crossFlameGeometry() {
   return geometry;
 }
 
-function starGeometry() {
-  const shape = new THREE.Shape();
-  const spikes = 5;
-  for (let i = 0; i < spikes * 2; i += 1) {
-    const radius = i % 2 === 0 ? 0.2 : 0.086;
-    const angle = (i / (spikes * 2)) * Math.PI * 2 - Math.PI / 2;
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius;
-    if (i === 0) shape.moveTo(x, y);
-    else shape.lineTo(x, y);
-  }
-  shape.closePath();
-  const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: 0.04,
-    bevelEnabled: true,
-    bevelThickness: 0.008,
-    bevelSize: 0.006,
-    bevelSegments: 1,
-  });
-  geometry.center();
-  return geometry;
-}
-
-function runeTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, 512, 512);
-  ctx.translate(256, 256);
-  ctx.strokeStyle = 'rgba(150, 230, 255, 0.9)';
-  ctx.fillStyle = 'rgba(240, 214, 160, 0.95)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(0, 0, 188, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(0, 0, 228, 0, Math.PI * 2);
-  ctx.stroke();
-  for (let i = 0; i < 24; i += 1) {
-    ctx.save();
-    ctx.rotate((i / 24) * Math.PI * 2);
-    ctx.translate(0, -208);
-    ctx.beginPath();
-    ctx.moveTo(0, -12);
-    ctx.lineTo(7, 9);
-    ctx.lineTo(-7, 9);
-    ctx.closePath();
-    if (i % 2 === 0) ctx.fill();
-    else ctx.stroke();
-    ctx.restore();
-  }
-  ctx.beginPath();
-  for (let i = 0; i < 6; i += 1) {
-    const angle = (i / 6) * Math.PI * 2 - Math.PI / 2;
-    const x = Math.cos(angle) * 132;
-    const y = Math.sin(angle) * 132;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.stroke();
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
-function glowTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
-  const gradient = ctx.createRadialGradient(128, 128, 6, 128, 128, 126);
-  gradient.addColorStop(0, 'rgba(255, 246, 224, 0.95)');
-  gradient.addColorStop(0.2, 'rgba(120, 220, 255, 0.38)');
-  gradient.addColorStop(0.55, 'rgba(90, 40, 110, 0.08)');
-  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, 256, 256);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
-function drawEmblem(ctx, size) {
-  ctx.clearRect(0, 0, size, size);
-  const gradient = ctx.createRadialGradient(size / 2, size / 2, 8, size / 2, size / 2, size * 0.5);
-  gradient.addColorStop(0, '#1c4258');
-  gradient.addColorStop(0.62, '#10202e');
-  gradient.addColorStop(1, '#070c14');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-  ctx.strokeStyle = 'rgba(180, 236, 255, 0.85)';
-  ctx.lineWidth = Math.max(2, size * 0.012);
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size * 0.3, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = '#f2d7a4';
-  ctx.beginPath();
-  const cx = size / 2;
-  const cy = size / 2;
-  for (let i = 0; i < 10; i += 1) {
-    const radius = i % 2 === 0 ? size * 0.16 : size * 0.07;
-    const angle = -Math.PI / 2 + (i / 10) * Math.PI * 2;
-    const x = cx + Math.cos(angle) * radius;
-    const y = cy + Math.sin(angle) * radius;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawNameplate(ctx, name, placeholder) {
-  const width = NAME_W;
-  const height = NAME_H;
-  ctx.clearRect(0, 0, width, height);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = `500 42px ${SERIF}`;
-  ctx.fillStyle = placeholder ? 'rgba(186, 214, 224, 0.55)' : 'rgba(244, 224, 180, 0.95)';
-  ctx.fillText(placeholder ? '预 览' : '生 日 快 乐', width / 2, height * 0.28);
-  ctx.strokeStyle = placeholder ? 'rgba(150, 190, 200, 0.25)' : 'rgba(150, 230, 255, 0.45)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(width * 0.34, height * 0.4);
-  ctx.lineTo(width * 0.66, height * 0.4);
-  ctx.stroke();
-
-  let size = 168;
-  ctx.font = `600 ${size}px ${SERIF}`;
-  while (ctx.measureText(name).width > width * 0.88 && size > 56) {
-    size -= 4;
-    ctx.font = `600 ${size}px ${SERIF}`;
-  }
-  const gradient = ctx.createLinearGradient(width * 0.12, 0, width * 0.88, height);
-  if (placeholder) {
-    gradient.addColorStop(0, 'rgba(198, 224, 232, 0.62)');
-    gradient.addColorStop(1, 'rgba(214, 206, 230, 0.45)');
-  } else {
-    gradient.addColorStop(0, '#c8f6ff');
-    gradient.addColorStop(0.48, '#fff4d4');
-    gradient.addColorStop(1, '#ffc6e4');
-  }
-  ctx.lineWidth = 6;
-  ctx.strokeStyle = 'rgba(6, 12, 20, 0.35)';
-  ctx.strokeText(name, width / 2, height * 0.68);
-  ctx.fillStyle = gradient;
-  ctx.fillText(name, width / 2, height * 0.68);
-}
-
-function pointsMaterial(vertexShader, fragmentShader) {
-  return shaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    uniforms: { uTime: timeUniform, uPixel: pixelUniform },
-    vertexShader,
-    fragmentShader,
-  });
-}
-
 export function createScene(canvas, hooks = {}) {
   let reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const compact = reduced || window.innerWidth < 860 || window.matchMedia('(pointer: coarse)').matches;
+  const compact = reduced || window.innerWidth < 860;
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -323,12 +192,12 @@ export function createScene(canvas, hooks = {}) {
   if (!renderer.getContext()) throw new Error('webgl');
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.08;
   renderer.setClearColor(0x05060c, 1);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x05060c);
-  const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 90);
+  scene.background = new THREE.Color(0x05070e);
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.08, 80);
   const rig = new THREE.Group();
   scene.add(rig);
 
@@ -337,42 +206,38 @@ export function createScene(canvas, hooks = {}) {
   const addEnv = (color, x, y, z, size, intensity) => {
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(size, size, size),
-      new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: intensity,
-        roughness: 1,
-        metalness: 0,
-      }),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: intensity, roughness: 1 }),
     );
     mesh.position.set(x, y, z);
     env.add(mesh);
   };
-  addEnv(0x147898, -5, 3.2, -2, 2.1, 8);
-  addEnv(0xc43b78, 5.2, 1.4, 2.2, 1.6, 6);
-  addEnv(0xe2b15e, 0.2, 6.2, -1, 1.8, 5);
-  addEnv(0x101828, 0, -3.2, 3.4, 5.5, 0.8);
-  env.add(new THREE.AmbientLight(0x9fc4d4, 0.45));
+  addEnv(0x1a90b0, -5, 3, -2, 2, 8);
+  addEnv(0xd24b86, 5, 1.2, 2, 1.5, 6);
+  addEnv(0xf0c56a, 0, 6, -1, 1.6, 5);
+  env.add(new THREE.AmbientLight(0xb7d0dc, 0.55));
   scene.environment = pmrem.fromScene(env, 0.04, 0.1, 24).texture;
-  scene.environmentIntensity = 0.72;
+  scene.environmentIntensity = 0.82;
   pmrem.dispose();
 
-  scene.add(new THREE.HemisphereLight(0xb7e7ff, 0x140910, 0.42));
-  const key = new THREE.DirectionalLight(0xf4fbff, 1.85);
-  key.position.set(-3.6, 6.4, 4.8);
+  scene.add(new THREE.HemisphereLight(0xc5eeff, 0x1a1020, 0.55));
+  const key = new THREE.DirectionalLight(0xfff8ef, 2.1);
+  key.position.set(-4, 6.5, 4.2);
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0xff4f9a, 0.85);
-  rim.position.set(4.4, 2.2, -3.4);
+  const overhead = new THREE.DirectionalLight(0xfff4e2, 1.8);
+  overhead.position.set(0.4, 8, 1.2);
+  scene.add(overhead);
+  const rim = new THREE.DirectionalLight(0xff5aa8, 1.15);
+  rim.position.set(5, 2.4, -3);
   scene.add(rim);
-  const candleLight = new THREE.PointLight(0xffc48a, 1.5, 7.5, 2);
-  candleLight.position.set(0, 1.7, 0.25);
+  const candleLight = new THREE.PointLight(0xffc48a, 2.4, 8, 2);
+  candleLight.position.set(0, 1.85, 0.2);
   rig.add(candleLight);
-  const fill = new THREE.PointLight(0x49d7ff, 1.15, 9, 2);
-  fill.position.set(-2.3, 1.5, 2.2);
+  const fill = new THREE.PointLight(0x49d7ff, 1.4, 10, 2);
+  fill.position.set(-2.2, 1.4, 2.4);
   rig.add(fill);
 
   const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(56, 32, 20),
+    new THREE.SphereGeometry(48, 28, 18),
     shaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
@@ -386,111 +251,116 @@ export function createScene(canvas, hooks = {}) {
   sky.renderOrder = -2;
   scene.add(sky);
 
-  const rnd = mulberry32(11);
-  const starCount = compact ? 760 : 1500;
+  const rnd = mulberry32(19);
+  const starCount = compact ? 700 : 1200;
   const starPositions = new Float32Array(starCount * 3);
   const starColors = new Float32Array(starCount * 3);
   const starSizes = new Float32Array(starCount);
-  const palette = [
-    [0.78, 0.9, 1],
-    [1, 0.93, 0.78],
-    [1, 0.74, 0.86],
-    [0.92, 0.96, 1],
-  ];
+  const palette = [[0.8, 0.92, 1], [1, 0.94, 0.8], [1, 0.76, 0.88]];
   for (let i = 0; i < starCount; i += 1) {
-    const radius = 18 + rnd() * 28;
+    const radius = 16 + rnd() * 26;
     const theta = rnd() * Math.PI * 2;
     const phi = Math.acos(2 * rnd() - 1);
     starPositions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
-    starPositions[i * 3 + 1] = radius * Math.cos(phi) * 0.7;
+    starPositions[i * 3 + 1] = radius * Math.cos(phi) * 0.65;
     starPositions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
     const color = palette[i % palette.length];
-    starColors[i * 3] = color[0];
-    starColors[i * 3 + 1] = color[1];
-    starColors[i * 3 + 2] = color[2];
-    starSizes[i] = 0.65 + rnd() * 1.7;
+    starColors.set(color, i * 3);
+    starSizes[i] = 0.7 + rnd() * 1.5;
   }
   const starGeo = new THREE.BufferGeometry();
   starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
   starGeo.setAttribute('aColor', new THREE.BufferAttribute(starColors, 3));
   starGeo.setAttribute('aSize', new THREE.BufferAttribute(starSizes, 1));
-  const stars = new THREE.Points(starGeo, pointsMaterial(starVertex, starFragment));
+  const stars = new THREE.Points(
+    starGeo,
+    shaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: { uTime: timeUniform, uPixel: pixelUniform },
+      vertexShader: starVertex,
+      fragmentShader: starFragment,
+    }),
+  );
   stars.frustumCulled = false;
-  stars.renderOrder = -1;
   scene.add(stars);
 
-  const dustCount = compact ? 90 : 170;
+  const dustCount = compact ? 80 : 140;
   const dustPositions = new Float32Array(dustCount * 3);
   const dustSeeds = new Float32Array(dustCount);
   const dustSpeeds = new Float32Array(dustCount);
   for (let i = 0; i < dustCount; i += 1) {
-    dustPositions[i * 3] = (rnd() - 0.5) * 4.4;
-    dustPositions[i * 3 + 1] = rnd() * 0.25;
-    dustPositions[i * 3 + 2] = (rnd() - 0.5) * 4.4;
+    dustPositions[i * 3] = (rnd() - 0.5) * 3.6;
+    dustPositions[i * 3 + 1] = rnd() * 0.2;
+    dustPositions[i * 3 + 2] = (rnd() - 0.5) * 3.6;
     dustSeeds[i] = rnd();
-    dustSpeeds[i] = 0.03 + rnd() * 0.05;
+    dustSpeeds[i] = 0.035 + rnd() * 0.04;
   }
   const dustGeo = new THREE.BufferGeometry();
   dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
   dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(dustSeeds, 1));
   dustGeo.setAttribute('aSpeed', new THREE.BufferAttribute(dustSpeeds, 1));
-  const dust = new THREE.Points(dustGeo, pointsMaterial(dustVertex, dustFragment));
-  dust.frustumCulled = false;
+  const dust = new THREE.Points(
+    dustGeo,
+    shaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: { uTime: timeUniform, uPixel: pixelUniform },
+      vertexShader: dustVertex,
+      fragmentShader: dustFragment,
+    }),
+  );
   rig.add(dust);
 
   const metal = new THREE.MeshStandardMaterial({
-    color: 0x151b24,
+    color: 0x1a2230,
     metalness: 0.92,
-    roughness: 0.34,
-    envMapIntensity: 0.48,
+    roughness: 0.28,
+    envMapIntensity: 0.7,
   });
   const gold = new THREE.MeshPhysicalMaterial({
-    color: 0xf1d3a2,
+    color: 0xf4d7a6,
     metalness: 1,
-    roughness: 0.23,
-    clearcoat: 0.4,
-    emissive: 0x8a5820,
-    emissiveIntensity: 0.32,
-    envMapIntensity: 0.8,
+    roughness: 0.2,
+    clearcoat: 0.55,
+    emissive: 0x8a5a22,
+    emissiveIntensity: 0.35,
+    envMapIntensity: 0.9,
   });
   const neon = new THREE.MeshStandardMaterial({
-    color: 0x072028,
-    emissive: 0x6af3ff,
-    emissiveIntensity: 1.7,
-    metalness: 0.3,
-    roughness: 0.38,
+    color: 0x083038,
+    emissive: 0x73f6ff,
+    emissiveIntensity: 1.8,
+    roughness: 0.35,
+    metalness: 0.25,
   });
-  const rose = new THREE.MeshStandardMaterial({
-    color: 0x2a101c,
-    emissive: 0xff5ea2,
-    emissiveIntensity: 1.25,
-    metalness: 0.28,
-    roughness: 0.4,
-  });
-  addRim(metal, 'vec3(0.25, 0.7, 0.9)');
+  addRim(metal);
 
-  const plinth = new THREE.Mesh(new THREE.CylinderGeometry(1.72, 1.9, 0.24, 6), metal);
-  plinth.position.y = 0.12;
-  plinth.rotation.y = Math.PI / 6;
-  const step = new THREE.Mesh(new THREE.CylinderGeometry(1.26, 1.38, 0.12, 6), metal);
-  step.position.y = 0.28;
-  step.rotation.y = Math.PI / 6;
-  const dais = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.08, 0.08, 48), metal);
-  dais.position.y = 0.37;
-  const trim = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.012, 12, 90), neon);
-  trim.rotation.x = Math.PI / 2;
-  trim.position.y = 0.34;
-  const roseRing = new THREE.Mesh(new THREE.TorusGeometry(1.58, 0.006, 8, 90), rose);
-  roseRing.rotation.x = Math.PI / 2;
-  roseRing.position.y = 0.14;
-  rig.add(plinth, step, dais, trim, roseRing);
+  const pedestal = new THREE.Mesh(
+    lathe([
+      [0.02, 0], [1.72, 0], [1.78, 0.045], [1.55, 0.09],
+      [1.5, 0.16], [1.18, 0.2], [1.14, 0.28], [0.92, 0.33],
+      [0.88, 0.42], [0.02, 0.42],
+    ], 96),
+    metal,
+  );
+  rig.add(pedestal);
+  const inlay = new THREE.Mesh(new THREE.TorusGeometry(1.22, 0.014, 12, 96), neon);
+  inlay.rotation.x = Math.PI / 2;
+  inlay.position.y = 0.3;
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.02, 12, 80), gold);
+  lip.rotation.x = Math.PI / 2;
+  lip.position.y = 0.42;
+  rig.add(inlay, lip);
 
   const dummy = new THREE.Object3D();
-  const pylons = new THREE.InstancedMesh(new THREE.BoxGeometry(0.035, 0.46, 0.035), neon, 6);
+  const pylons = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.02, 0.028, 0.42, 10), neon, 8);
   pylons.frustumCulled = false;
-  for (let i = 0; i < 6; i += 1) {
-    const angle = (i / 6) * Math.PI * 2 + Math.PI / 6;
-    dummy.position.set(Math.cos(angle) * 1.5, 0.34, Math.sin(angle) * 1.5);
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (i / 8) * Math.PI * 2;
+    dummy.position.set(Math.cos(angle) * 1.42, 0.28, Math.sin(angle) * 1.42);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
@@ -499,238 +369,106 @@ export function createScene(canvas, hooks = {}) {
   pylons.instanceMatrix.needsUpdate = true;
   rig.add(pylons);
 
-  const runeMat = new THREE.MeshBasicMaterial({
-    map: runeTexture(),
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    opacity: 0.42,
-    side: THREE.DoubleSide,
-  });
-  const runeDisc = new THREE.Mesh(new THREE.PlaneGeometry(4.7, 4.7), runeMat);
-  runeDisc.rotation.x = -Math.PI / 2;
-  runeDisc.position.y = 0.025;
-  const runeDiscSmall = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 3.1), runeMat);
-  runeDiscSmall.rotation.x = -Math.PI / 2;
-  runeDiscSmall.position.y = 0.03;
-  rig.add(runeDisc, runeDiscSmall);
-
-  const armillary = new THREE.Group();
-  armillary.position.y = 1.05;
-  const ringMat = (color) => shaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-    uniforms: {
-      uTime: timeUniform,
-      uColor: { value: new THREE.Color(color) },
-      uOpacity: { value: 1 },
-    },
-    vertexShader: ringVertex,
-    fragmentShader: ringFragment,
-  });
-  const ringH = new THREE.Mesh(new THREE.TorusGeometry(1.68, 0.012, 12, 140), ringMat(0xf0d7a4));
-  const ringA = new THREE.Mesh(new THREE.TorusGeometry(1.62, 0.01, 10, 120), ringMat(0x8ef6ff));
-  const ringB = new THREE.Mesh(new THREE.TorusGeometry(1.5, 0.008, 10, 110), ringMat(0xff8ec8));
-  armillary.add(ringH, ringA, ringB);
-  rig.add(armillary);
-
-  const ribbonGroup = new THREE.Group();
-  const makeRibbon = (phase, color) => {
-    const segments = 80;
-    const points = [];
-    for (let i = 0; i < segments; i += 1) {
-      const t = i / (segments - 1);
-      const angle = t * Math.PI * 2 * 1.15 + phase;
-      const y = 0.35 + t * 1.9;
-      const radius = 1.55 + Math.sin(t * Math.PI) * 0.18;
-      points.push(new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius));
-    }
-    const positions = [];
-    const along = [];
-    const indices = [];
-    const side = new THREE.Vector3();
-    const tangent = new THREE.Vector3();
-    const radial = new THREE.Vector3();
-    for (let i = 0; i < segments; i += 1) {
-      const t = i / (segments - 1);
-      const prev = points[Math.max(0, i - 1)];
-      const next = points[Math.min(segments - 1, i + 1)];
-      tangent.subVectors(next, prev);
-      if (tangent.lengthSq() < 1e-6) tangent.set(0, 1, 0);
-      tangent.normalize();
-      radial.set(points[i].x, 0, points[i].z);
-      if (radial.lengthSq() < 1e-6) radial.set(1, 0, 0);
-      radial.normalize();
-      side.crossVectors(tangent, radial).normalize();
-      const width = 0.012 + 0.012 * Math.sin(t * Math.PI);
-      const left = points[i].clone().addScaledVector(side, -width);
-      const right = points[i].clone().addScaledVector(side, width);
-      positions.push(left.x, left.y, left.z, right.x, right.y, right.z);
-      along.push(t, t);
-      if (i < segments - 1) {
-        const offset = i * 2;
-        indices.push(offset, offset + 1, offset + 2, offset + 1, offset + 3, offset + 2);
-      }
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('aAlong', new THREE.Float32BufferAttribute(along, 1));
-    geometry.setIndex(indices);
-    const mesh = new THREE.Mesh(
-      geometry,
-      shaderMaterial({
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-        uniforms: { uTime: timeUniform, uColor: { value: new THREE.Color(color) } },
-        vertexShader: ribbonVertex,
-        fragmentShader: ribbonFragment,
-      }),
-    );
-    mesh.frustumCulled = false;
-    mesh.renderOrder = 1;
-    return mesh;
-  };
-  ribbonGroup.add(makeRibbon(0.2, 0x7eefff), makeRibbon(Math.PI, 0xff8ec4));
-  rig.add(ribbonGroup);
-
-  const columnMat = shaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-    uniforms: {},
-    vertexShader: columnVertex,
-    fragmentShader: columnFragment,
-  });
-  const columnA = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 3.5), columnMat);
-  columnA.position.y = 1.35;
-  const columnB = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 3.5), columnMat);
-  columnB.position.y = 1.35;
-  columnB.rotation.y = Math.PI / 2;
-  rig.add(columnA, columnB);
-
-  const glow = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: glowTexture(),
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      opacity: 0.4,
-    }),
-  );
-  glow.position.set(0, 1.15, 0);
-  glow.scale.set(4.6, 4.6, 1);
-  rig.add(glow);
-
+  const tiers = [
+    { r: 0.92, h: 0.46, color: 0x6e8eab, emissive: 0x1d5678, flutes: 18 },
+    { r: 0.66, h: 0.38, color: 0x8a6798, emissive: 0x6a3068, flutes: 14 },
+    { r: 0.44, h: 0.3, color: 0x7f96b4, emissive: 0x2a6284, flutes: 12 },
+  ];
   const cake = new THREE.Group();
   cake.position.y = 0.42;
-  const cakeColors = [
-    { color: 0x4d6d8c, emissive: 0x1d4d6e },
-    { color: 0x6a4d78, emissive: 0x5a2a58 },
-    { color: 0x5d7394, emissive: 0x245878 },
-  ];
-  const tiers = [
-    { r: 1.04, h: 0.5 },
-    { r: 0.74, h: 0.4 },
-    { r: 0.5, h: 0.34 },
-  ];
   let tierY = 0;
-  const tierTops = [];
-  tiers.forEach((tier, index) => {
+  const tierLips = [];
+  tiers.forEach((tier) => {
     const material = new THREE.MeshPhysicalMaterial({
-      color: cakeColors[index].color,
-      roughness: 0.32,
-      metalness: 0.08,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.28,
-      iridescence: 0.8,
-      iridescenceIOR: 1.2,
-      iridescenceThicknessMinimum: 140,
-      iridescenceThicknessMaximum: 540,
-      emissive: cakeColors[index].emissive,
-      emissiveIntensity: 0.9,
-      envMapIntensity: 0.7,
+      color: tier.color,
+      roughness: 0.46,
+      metalness: 0.02,
+      clearcoat: 0.35,
+      clearcoatRoughness: 0.4,
+      iridescence: 0.25,
+      iridescenceIOR: 1.15,
+      iridescenceThicknessMinimum: 80,
+      iridescenceThicknessMaximum: 320,
+      emissive: tier.emissive,
+      emissiveIntensity: 1.15,
+      envMapIntensity: 0.55,
     });
-    addRim(material, index === 1 ? 'vec3(0.85, 0.45, 0.6)' : 'vec3(0.25, 0.55, 0.7)');
-    const mesh = new THREE.Mesh(tierGeometry(tier.r, tier.h), material);
-    mesh.position.y = index === 0 ? tierY : tierY - 0.02;
+    addRim(material);
+    material.side = THREE.DoubleSide;
+    const mesh = new THREE.Mesh(
+      lathe([
+        [0.01, 0],
+        [tier.r * 0.78, 0],
+        [tier.r * 0.96, 0.02],
+        [tier.r, 0.06],
+        [tier.r * 0.985, tier.h * 0.45],
+        [tier.r * 1.01, tier.h - 0.05],
+        [tier.r * 0.78, tier.h],
+        [0.01, tier.h],
+      ], 80, tier.flutes, 0.02),
+      material,
+    );
+    mesh.position.y = tierY;
     cake.add(mesh);
-    const icing = new THREE.Mesh(new THREE.TorusGeometry(tier.r * 1.03, 0.038, 12, 80), gold);
+    const icing = new THREE.Mesh(new THREE.TorusGeometry(tier.r * 0.98, 0.028, 10, 72), gold);
     icing.rotation.x = Math.PI / 2;
-    icing.position.y = tierY + tier.h - 0.02;
+    icing.position.y = tierY + tier.h - 0.015;
     cake.add(icing);
-    tierTops.push({ y: tierY + tier.h - 0.02, r: tier.r * 1.01 });
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(tier.r * 0.96, tier.r * 0.96, 0.045, 64),
+      material,
+    );
+    cap.position.y = tierY + tier.h - 0.02;
+    cake.add(cap);
+    tierLips.push({ y: icing.position.y, r: tier.r * 0.98 });
     tierY += tier.h;
   });
 
+  const dripGeo = lathe([
+    [0.001, 0], [0.055, 0], [0.04, -0.08], [0.018, -0.2], [0.001, -0.28],
+  ], 8);
   const dripMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.3,
-    metalness: 0.58,
-    emissive: 0x2c2418,
-    emissiveIntensity: 0.22,
-    envMapIntensity: 0.7,
+    color: 0xf6e2bf,
+    roughness: 0.32,
+    metalness: 0.45,
+    emissive: 0x5a3a18,
+    emissiveIntensity: 0.25,
   });
-  const dripCounts = [11, 8, 6];
-  const dripTotal = dripCounts.reduce((sum, count) => sum + count, 0);
-  const drips = new THREE.InstancedMesh(dripGeometry(), dripMat, dripTotal);
+  const dripTotal = 10 + 8 + 6;
+  const drips = new THREE.InstancedMesh(dripGeo, dripMat, dripTotal);
   drips.frustumCulled = false;
-  const goldColor = new THREE.Color(0xf3d7a6);
-  const roseColor = new THREE.Color(0xf0a4c4);
   let dripIndex = 0;
-  dripCounts.forEach((count, tierIndex) => {
+  [10, 8, 6].forEach((count, tierIndex) => {
+    const lipInfo = tierLips[tierIndex];
     for (let i = 0; i < count; i += 1) {
-      const angle = (i / count) * Math.PI * 2 + tierIndex * 0.35;
-      const lip = tierTops[tierIndex];
-      dummy.position.set(Math.cos(angle) * lip.r, lip.y, Math.sin(angle) * lip.r);
+      const angle = (i / count) * Math.PI * 2 + tierIndex * 0.4;
+      dummy.position.set(Math.cos(angle) * lipInfo.r, lipInfo.y, Math.sin(angle) * lipInfo.r);
       dummy.rotation.set(0, -angle, 0);
-      const scale = 0.78 + ((i * 17) % 5) * 0.08;
-      dummy.scale.set(scale, 0.85 + (i % 3) * 0.12, scale);
+      const s = 0.85 + (i % 3) * 0.1;
+      dummy.scale.set(s, 0.9 + (i % 4) * 0.08, s);
       dummy.updateMatrix();
       drips.setMatrixAt(dripIndex, dummy.matrix);
-      drips.setColorAt(dripIndex, i % 3 === 0 ? roseColor : goldColor);
       dripIndex += 1;
     }
   });
   drips.instanceMatrix.needsUpdate = true;
-  drips.instanceColor.needsUpdate = true;
   cake.add(drips);
-
-  const pearls = new THREE.InstancedMesh(new THREE.SphereGeometry(0.042, 16, 12), gold, 9);
-  pearls.frustumCulled = false;
-  for (let i = 0; i < 9; i += 1) {
-    const angle = (i / 9) * Math.PI * 2 + 0.2;
-    dummy.position.set(Math.cos(angle) * 0.78, 0.7, Math.sin(angle) * 0.78);
-    dummy.rotation.set(0, 0, 0);
-    dummy.scale.set(1, 1, 1);
-    dummy.updateMatrix();
-    pearls.setMatrixAt(i, dummy.matrix);
-  }
-  pearls.instanceMatrix.needsUpdate = true;
-  cake.add(pearls);
 
   const top = tierY;
   const candleCount = 6;
-  const candles = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.013, 0.016, 0.2, 10),
-    new THREE.MeshStandardMaterial({
-      color: 0xf6f1e6,
-      roughness: 0.62,
-      metalness: 0.04,
-      emissive: 0x3a3124,
-      emissiveIntensity: 0.18,
-    }),
-    candleCount,
-  );
+  const candleMat = new THREE.MeshStandardMaterial({
+    color: 0xf7f2e8,
+    roughness: 0.55,
+    emissive: 0x3a3228,
+    emissiveIntensity: 0.2,
+  });
+  const candles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.016, 0.02, 0.22, 12), candleMat, candleCount);
   candles.frustumCulled = false;
-  const flameGeo = crossFlameGeometry();
-  const flameSeeds = new Float32Array(candleCount);
-  for (let i = 0; i < candleCount; i += 1) flameSeeds[i] = rnd();
-  flameGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(flameSeeds, 1));
+  candles.userData.role = 'candles';
+  const flameGeo = crossFlame();
+  const seeds = new Float32Array(candleCount);
+  for (let i = 0; i < candleCount; i += 1) seeds[i] = rnd();
+  flameGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
   const flames = new THREE.InstancedMesh(
     flameGeo,
     shaderMaterial({
@@ -745,15 +483,15 @@ export function createScene(canvas, hooks = {}) {
     candleCount,
   );
   flames.frustumCulled = false;
-  flames.renderOrder = 3;
+  flames.userData.role = 'candles';
   for (let i = 0; i < candleCount; i += 1) {
-    const angle = (i / candleCount) * Math.PI * 2 + 0.35;
-    dummy.position.set(Math.cos(angle) * 0.28, top + 0.1, Math.sin(angle) * 0.28);
+    const angle = (i / candleCount) * Math.PI * 2 + 0.4;
+    dummy.position.set(Math.cos(angle) * 0.24, top + 0.11, Math.sin(angle) * 0.24);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     candles.setMatrixAt(i, dummy.matrix);
-    dummy.position.y = top + 0.18;
+    dummy.position.y = top + 0.2;
     dummy.updateMatrix();
     flames.setMatrixAt(i, dummy.matrix);
   }
@@ -762,87 +500,66 @@ export function createScene(canvas, hooks = {}) {
   cake.add(candles, flames);
 
   const crystal = new THREE.Group();
-  const crystalGeo = new THREE.IcosahedronGeometry(0.2, 1);
-  crystal.add(
-    new THREE.Mesh(
-      crystalGeo,
-      shaderMaterial({
-        transparent: true,
-        depthWrite: true,
-        uniforms: { uTime: timeUniform },
-        vertexShader: crystalVertex,
-        fragmentShader: crystalFragment,
-      }),
-    ),
-  );
-  const core = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.09, 0),
-    new THREE.MeshBasicMaterial({
-      color: 0xd8fbff,
+  const crystalMesh = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.2, 1),
+    shaderMaterial({
       transparent: true,
-      opacity: 0.85,
+      depthWrite: true,
+      uniforms: { uTime: timeUniform },
+      vertexShader: crystalVertex,
+      fragmentShader: crystalFragment,
+    }),
+  );
+  crystalMesh.userData.role = 'crystal';
+  const core = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.08, 0),
+    new THREE.MeshBasicMaterial({
+      color: 0xe7fdff,
+      transparent: true,
+      opacity: 0.9,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     }),
   );
-  crystal.add(core);
-  crystal.add(
-    new THREE.LineSegments(
-      new THREE.EdgesGeometry(crystalGeo),
-      new THREE.LineBasicMaterial({ color: 0xd9fbff, transparent: true, opacity: 0.7 }),
-    ),
-  );
-  crystal.position.y = top + 0.28;
+  crystal.add(crystalMesh, core);
+  crystal.add(new THREE.LineSegments(
+    new THREE.EdgesGeometry(crystalMesh.geometry),
+    new THREE.LineBasicMaterial({ color: 0xe7fbff, transparent: true, opacity: 0.75 }),
+  ));
+  crystal.position.y = top + 0.34;
   cake.add(crystal);
-
-  const starMat = gold.clone();
-  starMat.side = THREE.DoubleSide;
-  const star = new THREE.Mesh(starGeometry(), starMat);
-  star.position.y = top + 0.62;
-  cake.add(star);
-
-  const sparkCount = compact ? 36 : 80;
-  const sparkPositions = new Float32Array(sparkCount * 3);
-  const sparkSeeds = new Float32Array(sparkCount);
-  for (let i = 0; i < sparkCount; i += 1) {
-    const angle = rnd() * Math.PI * 2;
-    const radius = 0.35 + rnd() * 0.95;
-    sparkPositions[i * 3] = Math.cos(angle) * radius;
-    sparkPositions[i * 3 + 1] = 0.15 + rnd() * 0.4;
-    sparkPositions[i * 3 + 2] = Math.sin(angle) * radius;
-    sparkSeeds[i] = rnd();
-  }
-  const sparkGeo = new THREE.BufferGeometry();
-  sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPositions, 3));
-  sparkGeo.setAttribute('aSeed', new THREE.BufferAttribute(sparkSeeds, 1));
-  const sparkles = new THREE.Points(sparkGeo, pointsMaterial(sparkVertex, sparkFragment));
-  sparkles.frustumCulled = false;
-  cake.add(sparkles);
   rig.add(cake);
 
-  const moons = [];
-  const moonGeo = new THREE.SphereGeometry(0.055, 16, 12);
-  const moonMat = new THREE.MeshStandardMaterial({
-    color: 0xe7fbff,
-    emissive: 0x79e7ff,
-    emissiveIntensity: 1.15,
-    roughness: 0.28,
-    metalness: 0.35,
+  const ringMat = (color) => shaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: timeUniform,
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: 1 },
+    },
+    vertexShader: ringVertex,
+    fragmentShader: ringFragment,
   });
-  const moonGold = moonMat.clone();
-  moonGold.color.set(0xffe1a8);
-  moonGold.emissive.set(0xffc56a);
-  const moonSpecs = [
-    { r: 2.72, speed: 0.16, y: 1.2, phase: 0.4, squash: 0.68, mat: moonMat, scale: 1 },
-    { r: 3.15, speed: -0.1, y: 1.82, phase: 2.1, squash: 0.52, mat: moonGold, scale: 1.35 },
-    { r: 2.9, speed: 0.2, y: 0.62, phase: 4.0, squash: 0.78, mat: moonMat, scale: 0.8 },
+  const ringA = new THREE.Mesh(new THREE.TorusGeometry(1.55, 0.01, 12, 128), ringMat(0x9af4ff));
+  const ringB = new THREE.Mesh(new THREE.TorusGeometry(1.42, 0.008, 10, 112), ringMat(0xffb0d8));
+  ringA.position.y = 1.15;
+  ringB.position.y = 1.15;
+  rig.add(ringA, ringB);
+
+  const wave = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.012, 8, 80), ringMat(0xffe2a8));
+  wave.rotation.x = Math.PI / 2;
+  wave.position.y = 1.15;
+  wave.visible = false;
+  rig.add(wave);
+
+  const moons = [
+    { mesh: new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), new THREE.MeshStandardMaterial({ color: 0xe9fbff, emissive: 0x7ee7ff, emissiveIntensity: 1.1, roughness: 0.3 })), r: 2.35, speed: 0.22, y: 1.25, phase: 0.4, squash: 0.72 },
+    { mesh: new THREE.Mesh(new THREE.SphereGeometry(0.04, 14, 10), gold), r: 2.7, speed: -0.16, y: 1.7, phase: 2.2, squash: 0.55 },
   ];
-  moonSpecs.forEach((spec) => {
-    const mesh = new THREE.Mesh(moonGeo, spec.mat);
-    mesh.scale.setScalar(spec.scale);
-    rig.add(mesh);
-    moons.push({ mesh, ...spec });
-  });
+  moons.forEach((moon) => rig.add(moon.mesh));
 
   const portrait = new THREE.Group();
   const portraitCanvas = document.createElement('canvas');
@@ -850,6 +567,7 @@ export function createScene(canvas, hooks = {}) {
   portraitCanvas.height = 512;
   const portraitTex = new THREE.CanvasTexture(portraitCanvas);
   portraitTex.colorSpace = THREE.SRGBColorSpace;
+  portraitTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
   const portraitMat = shaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -863,41 +581,31 @@ export function createScene(canvas, hooks = {}) {
     vertexShader: portraitVertex,
     fragmentShader: portraitFragment,
   });
-  const photo = new THREE.Mesh(new THREE.CircleGeometry(0.58, 72), portraitMat);
-  photo.position.z = 0.025;
-  photo.renderOrder = 6;
-  const backMat = new THREE.MeshBasicMaterial({
-    color: 0x071018,
-    transparent: true,
-    opacity: 0.28,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  const back = new THREE.Mesh(new THREE.CircleGeometry(0.76, 64), backMat);
-  back.position.z = -0.05;
-  back.renderOrder = 5;
-  const bezel = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.02, 16, 90), gold);
-  bezel.renderOrder = 7;
-  const outer = new THREE.Mesh(new THREE.TorusGeometry(0.73, 0.011, 12, 90), neon);
-  outer.renderOrder = 7;
-  const scanner = new THREE.Mesh(new THREE.TorusGeometry(0.82, 0.007, 8, 80), ringMat(0xbff6ff));
-  scanner.renderOrder = 7;
-  const ticks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.012, 0.048, 0.012), gold, 48);
+  const photo = new THREE.Mesh(new THREE.CircleGeometry(0.56, 64), portraitMat);
+  photo.position.z = 0.03;
+  photo.userData.role = 'portrait';
+  const bezel = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.022, 16, 80), gold);
+  bezel.userData.role = 'portrait';
+  const outer = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.012, 12, 80), neon);
+  const scanner = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.006, 8, 72), ringMat(0xc8f6ff));
+  const ticks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.012, 0.045, 0.01), gold, 36);
   ticks.frustumCulled = false;
-  ticks.renderOrder = 7;
-  for (let i = 0; i < 48; i += 1) {
-    const angle = (i / 48) * Math.PI * 2;
-    dummy.position.set(Math.cos(angle) * 0.79, Math.sin(angle) * 0.79, 0.02);
+  for (let i = 0; i < 36; i += 1) {
+    const angle = (i / 36) * Math.PI * 2;
+    dummy.position.set(Math.cos(angle) * 0.76, Math.sin(angle) * 0.76, 0.02);
     dummy.rotation.set(0, 0, angle + Math.PI / 2);
     const major = i % 6 === 0;
-    dummy.scale.set(major ? 1.15 : 0.65, major ? 1.65 : 1, 1);
+    dummy.scale.set(1, major ? 1.6 : 0.85, 1);
     dummy.updateMatrix();
     ticks.setMatrixAt(i, dummy.matrix);
   }
   ticks.instanceMatrix.needsUpdate = true;
-  const crown = new THREE.Mesh(new THREE.OctahedronGeometry(0.046, 0), gold);
-  crown.position.set(0, 0.9, 0.03);
-  portrait.add(back, photo, bezel, outer, scanner, ticks, crown);
+  const hitPortrait = new THREE.Mesh(
+    new THREE.CircleGeometry(0.68, 24),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  hitPortrait.userData.role = 'portrait';
+  portrait.add(photo, bezel, outer, scanner, ticks, hitPortrait);
   rig.add(portrait);
 
   const nameCanvas = document.createElement('canvas');
@@ -908,15 +616,12 @@ export function createScene(canvas, hooks = {}) {
   nameTex.colorSpace = THREE.SRGBColorSpace;
   nameTex.generateMipmaps = false;
   nameTex.minFilter = THREE.LinearFilter;
-  nameTex.magFilter = THREE.LinearFilter;
-  const aniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-  nameTex.anisotropy = aniso;
-  portraitTex.anisotropy = aniso;
-  const nameWidth = 2.42;
+  nameTex.anisotropy = portraitTex.anisotropy;
+  const nameWidth = 2.15;
   const nameHeight = nameWidth * (NAME_H / NAME_W);
-  const uNameOpacity = { value: 0 };
+  const uPlaque = { value: 0 };
   const plaque = new THREE.Mesh(
-    new THREE.PlaneGeometry(nameWidth * 1.06, nameHeight * 1.16),
+    new THREE.PlaneGeometry(nameWidth * 1.04, nameHeight * 1.12),
     shaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -927,176 +632,142 @@ export function createScene(canvas, hooks = {}) {
       fragmentShader: plaqueFragment,
     }),
   );
-  plaque.material.uniforms.uOpacity = uNameOpacity;
-  plaque.renderOrder = 8;
+  plaque.material.uniforms.uOpacity = uPlaque;
   const nameMat = new THREE.MeshBasicMaterial({
     map: nameTex,
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
-    alphaTest: 0.06,
+    alphaTest: 0.05,
     toneMapped: false,
   });
   const nameMesh = new THREE.Mesh(new THREE.PlaneGeometry(nameWidth, nameHeight), nameMat);
-  nameMesh.position.z = 0.03;
-  nameMesh.renderOrder = 9;
-  const underline = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.92, 0.012),
-    new THREE.MeshBasicMaterial({
-      color: 0x9aebff,
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  );
-  underline.position.set(0, -nameHeight * 0.46, 0.04);
-  underline.renderOrder = 9;
+  nameMesh.position.z = 0.02;
   const nameGroup = new THREE.Group();
-  nameGroup.add(plaque, nameMesh, underline);
+  nameGroup.add(plaque, nameMesh);
   rig.add(nameGroup);
 
-  const tetherMat = shaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    uniforms: { uTime: timeUniform, uOpacity: { value: 0 } },
-    vertexShader: tetherVertex,
-    fragmentShader: tetherFragment,
-  });
-  let tether = null;
-  let tetherKey = '';
-
-  function updateTether() {
-    const start = new THREE.Vector3(layout.px, layout.py - 0.7 * layout.pScale, layout.pz);
-    const end = new THREE.Vector3(0.22, 0.5, 0.28);
-    const mid = new THREE.Vector3(
-      (start.x + end.x) * 0.48,
-      Math.min(start.y, end.y) - 0.18,
-      (start.z + end.z) * 0.5 + 0.2,
-    );
-    const geometry = new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(start, mid, end), 40, 0.01, 5, false);
-    if (!tether) {
-      tether = new THREE.Mesh(geometry, tetherMat);
-      tether.frustumCulled = false;
-      tether.renderOrder = 2;
-      rig.add(tether);
-    } else {
-      tether.geometry.dispose();
-      tether.geometry = geometry;
-    }
-    }
-
-  function applyLayout() {
-    const width = window.innerWidth;
-    const mobile = width < 860;
-    const desktopEdit = mode === 'edit' && width >= 980;
-    if (mobile) {
-      Object.assign(layout, {
-        camX: 0.1, camY: 1.7, camZ: 7.4,
-        lookX: 0, lookY: 1.25, lookZ: 0,
-        fov: 33,
-        px: 1.05, py: 1.95, pz: 0.95, pScale: 0.55, pYaw: 0.4,
-        nx: 0, ny: 2.35, nz: 0.25, nScale: 0.58,
-      });
-    } else if (desktopEdit) {
-      Object.assign(layout, {
-        camX: -0.15, camY: 1.55, camZ: 6.3,
-        lookX: -0.55, lookY: 1.15, lookZ: 0,
-        fov: 30,
-        px: 1.15, py: 1.55, pz: 0.4, pScale: 0.8, pYaw: 0.62,
-        nx: -0.05, ny: 2.16, nz: 0.12, nScale: 0.6,
-      });
-    } else {
-      Object.assign(layout, {
-        camX: 0.25, camY: 1.5, camZ: 6.15,
-        lookX: -0.05, lookY: 1.12, lookZ: 0,
-        fov: 30,
-        px: 1.45, py: 1.52, pz: 0.4, pScale: 0.84, pYaw: 0.52,
-        nx: 0, ny: 2.18, nz: 0.12, nScale: 0.68,
-      });
-    }
-    camera.fov = layout.fov;
-    const key = `${mobile}|${desktopEdit}|${layout.px}|${layout.py}|${layout.pScale}`;
-    if (key !== tetherKey) {
-      tetherKey = key;
-      updateTether();
-    }
-  }
-
-  function choosePixelRatio() {
-    const device = window.devicePixelRatio || 1;
-    let cap = window.innerWidth < 860 ? 1.5 : 1.75;
-    if (reduced) cap = 1.35;
-    let ratio = Math.min(device, cap);
-    const maxEdge = reduced ? 1500 : 2100;
-    const longEdge = Math.max(window.innerWidth, window.innerHeight) * ratio;
-    if (longEdge > maxEdge) {
-      ratio = Math.max(1, maxEdge / Math.max(window.innerWidth, window.innerHeight));
-    }
-    return ratio;
-  }
-
   const composer = new EffectComposer(renderer);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), reduced ? 0.2 : 0.38, 0.6, 0.86);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), reduced ? 0.18 : 0.32, 0.45, 0.88);
   const grade = new ShaderPass(gradeShader);
   grade.uniforms.uTime = timeUniform;
   composer.addPass(new RenderPass(scene, camera));
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
   composer.addPass(grade);
-  const samples = window.innerWidth >= 900 && !reduced
-    ? Math.min(2, renderer.capabilities.maxSamples || 0)
-    : 0;
-  composer.renderTarget1.samples = samples;
-  composer.renderTarget2.samples = samples;
 
-  function applyQuality() {
-    bloom.strength = reduced ? 0.18 : 0.38;
-    bloom.radius = 0.58;
-    bloom.threshold = 0.86;
-    grade.uniforms.uAmount.value = reduced ? 0.012 : 0.022;
-  }
-  applyQuality();
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const look = new THREE.Vector3();
+  const hitCrystal = new THREE.Mesh(
+    new THREE.SphereGeometry(0.42, 12, 10),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+  );
+  hitCrystal.position.y = top + 0.34;
+  hitCrystal.userData.role = 'crystal';
+  cake.add(hitCrystal);
+  const hitCandles = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.42, 0.42, 0.45, 12),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+  );
+  hitCandles.position.y = top + 0.2;
+  hitCandles.userData.role = 'candles';
+  cake.add(hitCandles);
+  const interactive = [hitCrystal, hitCandles, hitPortrait, crystalMesh, candles, flames, photo, bezel];
 
   let mode = 'edit';
   let hold = true;
-  let seenEditIntro = false;
-  let introElapsed = 0;
+  let intro = 1;
   let visualTime = 0;
   let last = performance.now();
   let captionOn = false;
   let disposed = false;
   let composerReady = false;
-  const pointer = { x: 0, y: 0, sx: 0, sy: 0 };
+  let orbitYaw = 0.58;
+  let orbitPitch = 0.22;
+  let yawVel = 0;
+  let pitchVel = 0;
+  let dist = 6.2;
+  let distTarget = 6.2;
   let dragging = false;
-  let dragLastX = 0;
-  let dragYaw = 0;
-  let dragTarget = 0;
-  const camFrom = new THREE.Vector3(0.2, 4.6, 12.6);
-  const desiredCam = new THREE.Vector3();
-  const desiredLook = new THREE.Vector3();
-  const look = new THREE.Vector3(0, 1.1, 0);
-  const portraitCtx = portraitCanvas.getContext('2d');
+  let dragX = 0;
+  let dragY = 0;
+  let dragMoved = 0;
+  let lastMove = 0;
+  let hoverRole = '';
+  let wish = 0;
+  let spark = 0;
+  let focus = 0;
+  let waveT = 2;
+  let idle = 0;
 
-  function resize() {
+  function choosePixelRatio() {
+    const device = window.devicePixelRatio || 1;
+    const small = Math.min(window.innerWidth, window.innerHeight) < 760;
+    let ratio = Math.min(device, reduced ? 1.2 : small ? 1.5 : 1.65);
+    const longEdge = Math.max(window.innerWidth, window.innerHeight) * ratio;
+    if (longEdge > 1800) ratio *= 1800 / longEdge;
+    return Math.max(1, ratio);
+  }
+
+  function applyLayout() {
     const width = window.innerWidth;
-    const height = Math.max(1, window.innerHeight);
-    const ratio = choosePixelRatio();
-    pixelUniform.value = ratio;
-    renderer.setPixelRatio(ratio);
-    renderer.setSize(width, height, false);
-    composer.setSize(width, height);
-    camera.aspect = width / height;
-    applyLayout();
+    const mobile = width < 860;
+    const desktopEdit = mode === 'edit' && width >= 980;
+    layout.lookX = desktopEdit ? -0.4 : 0;
+    layout.dist = mobile ? 7.5 : desktopEdit ? 6.45 : 6.05;
+    layout.pitch = mobile ? 0.3 : 0.2;
+    layout.portrait.set(mobile ? 0.95 : 1.68, mobile ? 1.95 : 1.58, mobile ? 0.85 : 0.28);
+    layout.portraitScale = mobile ? 0.56 : 0.84;
+    layout.portraitYaw = mobile ? 0.35 : 0.58;
+    layout.nameY = mobile ? 2.42 : 2.24;
+    layout.nameScale = mobile ? 0.56 : 0.64;
+    camera.fov = mobile ? 34 : 29;
+    camera.aspect = width / Math.max(1, window.innerHeight);
     camera.updateProjectionMatrix();
   }
 
+  function resize() {
+    const ratio = choosePixelRatio();
+    pixelUniform.value = ratio;
+    renderer.setPixelRatio(ratio);
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    composer.setSize(window.innerWidth, window.innerHeight);
+    applyLayout();
+  }
+
+  function setPointer(event) {
+    ndc.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
+  }
+
+  function pick(event) {
+    setPointer(event);
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(interactive, false);
+    return hits.length ? hits[0].object.userData.role : '';
+  }
+
+  function trigger(role) {
+    if (role === 'crystal') {
+      wish = 1;
+      waveT = 0;
+      wave.visible = true;
+      hooks.onInteract?.({ role, text: '愿望已点亮' });
+    } else if (role === 'candles') {
+      spark = 1;
+      hooks.onInteract?.({ role, text: '烛火跳了一下' });
+    } else if (role === 'portrait') {
+      focus = 1;
+      hooks.onInteract?.({ role, text: '肖像转过脸来' });
+    }
+  }
+
   function setName(text, placeholder) {
-    drawNameplate(nameCtx, text || PLACEHOLDER_NAME, placeholder);
+    drawNameplate(nameCtx, text || PLACEHOLDER_NAME, Boolean(placeholder));
     nameTex.needsUpdate = true;
   }
 
+  const portraitCtx = portraitCanvas.getContext('2d');
   function setPortrait(source) {
     const size = portraitCanvas.width;
     if (!source) {
@@ -1106,12 +777,10 @@ export function createScene(canvas, hooks = {}) {
       const iw = source.naturalWidth || source.width;
       const ih = source.naturalHeight || source.height;
       const side = Math.min(iw, ih);
-      const sx = (iw - side) / 2;
-      const sy = (ih - side) / 2;
       portraitCtx.clearRect(0, 0, size, size);
       portraitCtx.imageSmoothingEnabled = true;
       portraitCtx.imageSmoothingQuality = 'high';
-      portraitCtx.drawImage(source, sx, sy, side, side, 0, 0, size, size);
+      portraitCtx.drawImage(source, (iw - side) / 2, (ih - side) / 2, side, side, 0, 0, size, size);
       portraitMat.uniforms.uPhoto.value = 1;
     }
     portraitTex.needsUpdate = true;
@@ -1120,117 +789,95 @@ export function createScene(canvas, hooks = {}) {
   function start(nextMode) {
     mode = nextMode;
     hold = false;
+    intro = reduced ? 1 : 0;
+    distTarget = layout.dist;
+    orbitPitch = layout.pitch;
+    yawVel = 0;
+    pitchVel = 0;
     captionOn = false;
     hooks.onCaption?.(false);
-    if (mode === 'view' || !seenEditIntro) {
-      introElapsed = 0;
-      if (mode === 'edit') seenEditIntro = true;
-    } else {
-      introElapsed = 100;
-    }
-    resize();
+    applyLayout();
   }
 
   function frame(now) {
     if (disposed) return;
-    const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+    const dt = Math.min(0.033, Math.max(0, (now - last) / 1000));
     last = now;
     visualTime += dt * (reduced ? 0.35 : 1);
     timeUniform.value = visualTime;
-    if (!hold && !reduced) introElapsed += Math.min(0.1, dt);
-    const duration = reduced ? 0 : (mode === 'view' ? 6.1 : 3);
-    const progress = duration === 0 ? 1 : Math.min(1, introElapsed / duration);
-    const parallax = reduced ? 0.2 : 1;
-    const follow = 1 - Math.exp(-4 * dt);
-    pointer.sx += (pointer.x - pointer.sx) * follow;
-    pointer.sy += (pointer.y - pointer.sy) * follow;
-    dragYaw += (dragTarget - dragYaw) * (1 - Math.exp(-3 * dt));
+    if (!hold && intro < 1) intro = Math.min(1, intro + dt / 2.15);
+    const eased = easeOutCubic(intro);
+    idle = dragging ? 0 : idle + dt;
 
-    const eased = duration === 0 ? 1 : easeOutQuart(progress);
-    desiredCam.set(
-      camFrom.x + (layout.camX - camFrom.x) * eased + pointer.sx * 0.16 * parallax,
-      camFrom.y + (layout.camY - camFrom.y) * eased + Math.sin(visualTime * 0.5) * (reduced ? 0 : 0.04),
-      camFrom.z + (layout.camZ - camFrom.z) * eased,
-    );
-    desiredLook.set(
-      layout.lookX * eased + pointer.sx * 0.08 * parallax,
-      0.42 + (layout.lookY - 0.42) * eased,
-      layout.lookZ,
-    );
-    if (progress < 1) {
-      camera.position.copy(desiredCam);
-      look.copy(desiredLook);
-    } else {
-      const glide = 1 - Math.exp(-3.2 * dt);
-      camera.position.lerp(desiredCam, glide);
-      look.lerp(desiredLook, glide);
+    const damp = 1 - Math.exp(-3.2 * dt);
+    if (!dragging) {
+      orbitYaw += yawVel * dt + (idle > 0.6 && !reduced ? dt * 0.08 : 0);
+      orbitPitch += pitchVel * dt;
+      yawVel *= Math.exp(-2.4 * dt);
+      pitchVel *= Math.exp(-2.4 * dt);
+      orbitPitch = clamp(orbitPitch, 0.08, 0.62);
     }
+    dist += (distTarget - dist) * damp;
+    const introYaw = orbitYaw + (1 - eased) * 0.7;
+    const introPitch = orbitPitch + (1 - eased) * 0.18;
+    const introDist = dist + (1 - eased) * 3.2;
+    const bob = reduced ? 0 : Math.sin(visualTime * 0.7) * 0.03;
+    look.set(layout.lookX, 1.18 + bob * 0.2, 0);
+    camera.position.set(
+      look.x + Math.sin(introYaw) * Math.cos(introPitch) * introDist,
+      look.y + Math.sin(introPitch) * introDist * 0.85 + 0.35,
+      look.z + Math.cos(introYaw) * Math.cos(introPitch) * introDist,
+    );
     camera.lookAt(look);
-    renderer.toneMappingExposure = 0.74 + 0.34 * eased;
 
-    rig.position.y = Math.sin(visualTime * 0.8) * (reduced ? 0.008 : 0.036);
-    rig.rotation.y = dragYaw + Math.sin(visualTime * 0.12) * (reduced ? 0 : 0.04);
-
-    const cakeReveal = reveal(progress, 0.12, 0.36);
-    cake.position.y = 0.42 + (1 - cakeReveal) * -0.42;
-    armillary.scale.setScalar(0.78 + 0.22 * reveal(progress, 0.04, 0.42));
-    ringH.rotation.x = Math.PI / 2;
-    ringH.rotation.z = visualTime * 0.16;
+    rig.position.y = bob;
     ringA.rotation.x = 0.95;
-    ringA.rotation.y = visualTime * 0.25;
+    ringA.rotation.y = visualTime * 0.22;
     ringB.rotation.z = 1.05;
-    ringB.rotation.y = -visualTime * 0.2;
-    ribbonGroup.rotation.y = visualTime * 0.1;
-    runeDisc.rotation.z = visualTime * 0.05;
-    runeDiscSmall.rotation.z = -visualTime * 0.08;
-    crystal.rotation.y = visualTime * 0.45;
-    crystal.rotation.z = Math.sin(visualTime * 0.45) * 0.16;
-    crystal.position.y = top + 0.28 + Math.sin(visualTime * 1.15) * 0.028;
-    star.rotation.y = visualTime * 0.7;
-    scanner.rotation.z = visualTime * 0.45;
-    candleLight.intensity = (0.3 + 1.65 * reveal(progress, 0.28, 0.34))
-      * (reduced ? 1 : 0.94 + Math.sin(visualTime * 11) * 0.045);
+    ringB.rotation.y = -visualTime * 0.18;
+    crystal.rotation.y = visualTime * 0.45 + wish * 0.4;
+    crystal.rotation.z = Math.sin(visualTime * 0.5) * 0.12;
+    const crystalPop = wish > 0 ? 1 + Math.sin((1 - wish) * Math.PI) * 0.14 : 1;
+    crystal.scale.setScalar(crystalPop);
+    cake.rotation.y = Math.sin(visualTime * 0.15) * 0.04;
+    scanner.rotation.z = visualTime * (0.45 + focus * 2.2);
+
+    wish = Math.max(0, wish - dt * 0.55);
+    spark = Math.max(0, spark - dt * 0.8);
+    focus = Math.max(0, focus - dt * 0.7);
+    candleLight.intensity = 1.6 + spark * 3.2 + Math.sin(visualTime * 9) * (reduced ? 0 : 0.08);
+    if (wave.visible) {
+      waveT += dt;
+      const k = waveT / 1.25;
+      wave.scale.setScalar(0.4 + k * 2.6);
+      wave.material.uniforms.uOpacity.value = Math.max(0, 1 - k) * 0.9;
+      if (k >= 1) wave.visible = false;
+    }
 
     for (let i = 0; i < moons.length; i += 1) {
       const moon = moons[i];
       const angle = visualTime * moon.speed + moon.phase;
       moon.mesh.position.set(
         Math.cos(angle) * moon.r,
-        moon.y + Math.sin(visualTime * 0.7 + moon.phase) * 0.05,
+        moon.y + Math.sin(visualTime * 0.8 + moon.phase) * 0.05,
         Math.sin(angle) * moon.r * moon.squash,
       );
     }
 
-    const portraitReveal = reveal(progress, mode === 'view' ? 0.4 : 0.25, 0.3);
-    portrait.position.set(
-      layout.px + pointer.sx * 0.05 * parallax,
-      layout.py + (1 - portraitReveal) * -0.24,
-      layout.pz,
-    );
-    portrait.scale.setScalar(layout.pScale * (0.92 + 0.08 * portraitReveal));
-    portrait.rotation.y = layout.pYaw + pointer.sx * 0.22 * parallax;
-    portrait.rotation.x = -0.05 + pointer.sy * -0.1 * parallax;
-    photo.position.x = pointer.sx * -0.03 * parallax;
-    photo.position.y = pointer.sy * -0.016 * parallax;
-    portraitMat.uniforms.uOpacity.value = portraitReveal;
-    backMat.opacity = 0.28 * portraitReveal;
-    tetherMat.uniforms.uOpacity.value = portraitReveal;
+    const revealAmount = Math.min(1, eased * 1.25);
+    portrait.position.copy(layout.portrait);
+    portrait.position.y += (1 - revealAmount) * -0.18;
+    portrait.scale.setScalar(layout.portraitScale * (0.94 + focus * 0.05));
+    portrait.rotation.y = layout.portraitYaw;
+    portrait.rotation.z = Math.sin(visualTime * 0.6) * 0.03;
+    portraitMat.uniforms.uOpacity.value = revealAmount;
+    uPlaque.value = revealAmount;
+    nameMat.opacity = revealAmount;
+    nameGroup.position.set(layout.lookX * 0.15, layout.nameY + Math.sin(visualTime * 0.8) * 0.012, 0.05);
+    nameGroup.scale.setScalar(layout.nameScale);
+    nameGroup.rotation.x = -0.08;
 
-    const nameReveal = reveal(progress, mode === 'view' ? 0.56 : 0.38, 0.28);
-    const nameOpacity = mode === 'edit' ? Math.max(nameReveal, 0.92) : nameReveal;
-    uNameOpacity.value = nameOpacity;
-    nameMat.opacity = nameOpacity;
-    underline.material.opacity = nameReveal;
-    nameGroup.position.set(
-      layout.nx + pointer.sx * 0.04 * parallax,
-      layout.ny + Math.sin(visualTime * 0.85) * 0.016,
-      layout.nz,
-    );
-    nameGroup.scale.setScalar(layout.nScale);
-    nameGroup.rotation.y = pointer.sx * -0.06 * parallax;
-    nameGroup.rotation.x = -0.08 + pointer.sy * 0.04 * parallax;
-
-    const showCaption = mode === 'view' && !hold && progress > 0.62;
+    const showCaption = mode === 'view' && !hold && eased > 0.62;
     if (showCaption !== captionOn) {
       captionOn = showCaption;
       hooks.onCaption?.(showCaption);
@@ -1241,7 +888,6 @@ export function createScene(canvas, hooks = {}) {
         composer.render();
         composerReady = true;
       } catch {
-        composerReady = false;
         renderer.render(scene, camera);
       }
     } else {
@@ -1257,26 +903,60 @@ export function createScene(canvas, hooks = {}) {
   setName(PLACEHOLDER_NAME, true);
   setPortrait(null);
   resize();
+
   window.addEventListener('resize', resize);
-  window.addEventListener('pointermove', (event) => {
-    pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-    pointer.y = (event.clientY / window.innerHeight) * 2 - 1;
-    if (!dragging) return;
-    const delta = (event.clientX - dragLastX) / window.innerWidth;
-    dragLastX = event.clientX;
-    dragTarget = Math.max(-0.55, Math.min(0.55, dragTarget + delta * 1.8));
-  });
-  window.addEventListener('pointerup', () => {
-    dragging = false;
-    dragTarget = 0;
-  });
   canvas.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
     dragging = true;
-    dragLastX = event.clientX;
-    dragTarget = dragYaw;
+    dragMoved = 0;
+    dragX = event.clientX;
+    dragY = event.clientY;
+    lastMove = performance.now();
+    yawVel = 0;
+    pitchVel = 0;
+    document.body.classList.add('is-dragging');
     canvas.setPointerCapture?.(event.pointerId);
   });
+  window.addEventListener('pointermove', (event) => {
+    if (!dragging) {
+      const nowMs = performance.now();
+      if (nowMs - lastMove > 70) {
+        lastMove = nowMs;
+        const role = pick(event);
+        if (role !== hoverRole) {
+          hoverRole = role;
+          document.body.classList.toggle('is-hovering', Boolean(role));
+        }
+      }
+      return;
+    }
+    const dx = event.clientX - dragX;
+    const dy = event.clientY - dragY;
+    dragMoved += Math.abs(dx) + Math.abs(dy);
+    const nowMs = performance.now();
+    const step = Math.max(0.016, (nowMs - lastMove) / 1000);
+    lastMove = nowMs;
+    orbitYaw -= dx * 0.005;
+    orbitPitch = clamp(orbitPitch + dy * 0.003, 0.08, 0.62);
+    yawVel = (-dx * 0.005) / step;
+    pitchVel = (dy * 0.003) / step;
+    dragX = event.clientX;
+    dragY = event.clientY;
+  });
+  window.addEventListener('pointerup', (event) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('is-dragging');
+    if (dragMoved < 8) {
+      const role = pick(event);
+      if (role) trigger(role);
+    }
+  });
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    distTarget = clamp(distTarget + Math.sign(event.deltaY) * 0.28, 4.4, 9.2);
+  }, { passive: false });
+
   canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
     hooks.onContextLost?.();
@@ -1297,7 +977,8 @@ export function createScene(canvas, hooks = {}) {
     setPortrait,
     setReduced(next) {
       reduced = next;
-      applyQuality();
+      bloom.strength = next ? 0.16 : 0.32;
+      grade.uniforms.uAmount.value = next ? 0.01 : 0.02;
       resize();
     },
     dispose() {

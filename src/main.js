@@ -49,6 +49,7 @@ const fallbackImg = document.querySelector('#fallback-img');
 const fallbackName = document.querySelector('#fallback-name');
 const fallbackText = document.querySelector('#fallback-text');
 const canvas = document.querySelector('#scene');
+const wishToast = document.querySelector('#wish-toast');
 
 const audio = createAudio();
 const portrait = {
@@ -521,6 +522,13 @@ async function boot() {
       },
       onContextLost() {
         setStatus('画面中断了，请刷新页面。', 'error');
+      },
+      onInteract({ text }) {
+        wishToast.textContent = text;
+        wishToast.classList.add('is-on');
+        window.clearTimeout(wishToast._timer);
+        wishToast._timer = window.setTimeout(() => wishToast.classList.remove('is-on'), 1400);
+        if (audio.enabled) audio.playChime();
       },
     });
   } catch {
